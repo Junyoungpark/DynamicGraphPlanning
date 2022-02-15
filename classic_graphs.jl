@@ -1,6 +1,6 @@
 using LightGraphs
 using LightGraphs: src, dst, edgetype, vertices, edges, add_vertex!, rem_vertex!, has_vertex, has_edge, inneighbors, outneighbors, indegree, outdegree, degree, induced_subgraph, SimpleGraphEdge, SimpleEdge, reverse
-import LightGraphs: nv, ne, is_directed, add_edge!, rem_edge!, edges, vertices, neighbors, weights
+import LightGraphs: nv, ne, is_directed, add_edge!, rem_edge!, edges, vertices, neighbors, weights #adjacency_matrix
 
 using Random
 using StatsBase: sample
@@ -73,7 +73,7 @@ function set_weight!(g::ClassicGraph, _e::SimpleEdge, w::U) where U
     return true
 end
 
-adjacency_matrix(g::ClassicGraph) = adjacency_matrix(g.graph)
+adjacency_matrix(g::ClassicGraph) = LightGraphs.LinAlg.adjacency_matrix(g.graph)
 function weights(g::ClassicGraph)
     w_adj = zeros(nv(g), nv(g))
     range(1, stop=nv(g)) .|> i -> w_adj[i, g.graph.fadjlist[i]] = g.weights[i]
@@ -127,6 +127,21 @@ function rem_edge!(g::ClassicGraph{T,U,S}, _e::SimpleGraphEdge{T}) where T where
     deleteat!(g.weights[_e.dst], idx)
     
     return rem_edge!(g.graph, _e)
+end
+
+function distance_matrix(g::ClassicGraph{T,U,S}) where T where U where S
+    @assert is_connected(g.graph)
+    A = adjacency_matrix(g)
+    A_n = A
+    n = 1
+    As = [A]
+    while any(A_n .== 0)
+        A_n = A*A_n
+        n += 1
+        push!(As, n *min.(A_n, 1))
+    end
+    M = reshape(hcat(As...), (nv(g), nv(g), n))
+    return reshape([findfirst(x->x!=0, M[i,j,:]) for i in 1:nv(g) for j in 1:nv(g)], (nv(g),nv(g)))
 end
 
 ## TODO : support add / rem vertices
