@@ -6,10 +6,11 @@ from warnings import warn
 import pdb
 
 grep = lambda q, x : list(map(q.__getitem__, x))
+softmax = lambda x : np.exp(x)/sum(np.exp(x))
 
 class anyReplayBuffer(ReplayBuffer):
 
-    def __init__(self, max_replay_buffer_size, replace = True):
+    def __init__(self, max_replay_buffer_size, replace = True, prioritized=False):
         self._max_replay_buffer_size = max_replay_buffer_size
         self._observations = deque([], max_replay_buffer_size)
         # It's a bit memory inefficient to save the observations twice,
@@ -20,6 +21,8 @@ class anyReplayBuffer(ReplayBuffer):
         self._rewards = deque([], max_replay_buffer_size)
         self._terminals =  deque([], max_replay_buffer_size)
         self._replace = replace
+        self._prioritized = prioritized
+            
 
     def add_sample(self, observation, action, reward, next_observation, terminal, env_info, **kwargs):
         self._observations.appendleft(observation)
@@ -32,7 +35,10 @@ class anyReplayBuffer(ReplayBuffer):
         pass
 
     def random_batch(self, batch_size):
-        indices = np.random.choice(self.get_size(), size=batch_size, replace=self._replace or self._size < batch_size)
+        prio = softmax(self._rewards) if self._prioritized else None
+        indices = np.random.choice(self.get_size(), 
+                                   size=batch_size, p=prio, 
+                                   replace=self._replace or self._size < batch_size)
         if not self._replace and self._size < batch_size:
             warn('Replace was set to false, but is temporarily set to true \
             because batch size is larger than current size of replay.')

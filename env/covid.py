@@ -12,6 +12,7 @@ from torch_geometric.utils.random import stochastic_blockmodel_graph
 from torch_geometric.utils import to_dense_adj, to_networkx
 
 from collections import namedtuple
+from copy import copy, deepcopy
 from typing import Optional
 from enum import Enum, IntEnum
 
@@ -44,17 +45,12 @@ score = lambda m : .6 if m == Measure.business_as_usual else (.2 if m == Measure
 cost = lambda m : .0 if m == Measure.business_as_usual else (1. if m == Measure.mask_mandate else 3.0)
 inter_score = lambda m1, m2 : max(score(m1), score(m2))
 
-
-
 format_input = lambda x: F.one_hot(torch.Tensor(np.vectorize(int)(x)).to(torch.int64), 
                                    num_classes=len(NodeState)).to(torch.float32)
 
 format_data = lambda x: (format_input(x.x).to(torch.float32),
                          x.edge_index,
                          torch.Tensor(x.edge_attr))
-# format_data = lambda x: (format_input(x.x).to(torch.float32).to(device),
-#                          x.edge_index.to(device), 
-#                          torch.Tensor(x.edge_attr).to(device))
 
 class CovidSEIR(gym.Env):
     """
@@ -132,10 +128,11 @@ class CovidSEIR(gym.Env):
         done = all(self.state.x != NodeState.I)
         reward = np.sum(np.vectorize(cost)(action)*self.community_sizes)
         
-        return self.state, reward, done, {}
+        return deepcopy(self.state), reward, done, {}
 
     def reset(self, *, seed: Optional[int] = None, return_info: bool = False, options: Optional[dict] = None):
-#         super().reset(seed=seed)
+        if not seed == None:
+            super().reset(seed=seed)
         
         probs = np.random.rand(self.n_communities, self.n_communities)
         probs = np.maximum((probs.T + probs)/4, 0.9*np.eye(self.n_communities))
@@ -146,10 +143,8 @@ class CovidSEIR(gym.Env):
         self.state = Data(x=x, edge_index=edge_index, edge_attr=np.ones(edge_index.shape[1])*0.6)
         # following the defintion of stochastic block model generation (https://pytorch-geometric.readthedocs.io/en/latest/_modules/torch_geometric/utils/random.html#stochastic_blockmodel_graph)
         self.community_labels = sum([[i]*b for i, b in enumerate(self.community_sizes)], [])
-        #torch.cat([torch.Tensor(self.community_sizes).new_full((b, ), i) for i, b in enumerate(self.community_sizes)])
-        #randint(self.n_communities, size=self.n_nodes)
         
-        return self.state #.to_dict()
+        return deepcopy(self.state)
 
     def render(self):
         g = torch_geometric.utils.to_networkx(data, to_undirected=True)

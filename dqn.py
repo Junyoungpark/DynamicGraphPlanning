@@ -10,12 +10,12 @@ import rlkit.torch.pytorch_util as ptu
 from rlkit.core.eval_util import create_stats_ordered_dict
 from rlkit.torch.torch_rl_algorithm import TorchTrainer
 
-from env import format_data
+# from env import format_data
 import pdb
 
 class DQNTrainer(TorchTrainer):
     def __init__(self, qf, target_qf, learning_rate=1e-3, soft_target_tau=1e-3, target_update_period=1, 
-                 qf_criterion=None, discount=0.99, reward_scale=1.0, args=None):
+                 qf_criterion=None, discount=0.99, reward_scale=1.0, args=[], format_data=None):
         super().__init__()
         self.qf = qf
         self.target_qf = target_qf
@@ -31,6 +31,11 @@ class DQNTrainer(TorchTrainer):
         self._n_train_steps_total = 0
         self._need_to_update_eval_statistics = True
         self.args = args
+        
+        if format_data == None:
+            self.format_fn = lambda x : x
+        else:
+            self.format_fn = format_data
 
     def train_from_torch(self, batch):
         rewards = torch.Tensor(batch['rewards']).unsqueeze(-1) * self.reward_scale
@@ -43,18 +48,20 @@ class DQNTrainer(TorchTrainer):
         """
         Compute loss
         """        
-        ff = lambda x: self.target_qf(*x, self.args)
-        out = torch.stack(list(map(ff, map(format_data, obs))), axis=0).cpu()
+        ff = lambda x: self.target_qf(*x, *self.args)
+        out = torch.stack(list(map(ff, map(self.format_fn, obs))), axis=0).cpu()
         
         target_q_values = out.max(-1, keepdims=True)[0].sum(1)        
         y_target = rewards + (1. - terminals) * self.discount * target_q_values
         
-        ff = lambda x: self.qf(*x, self.args)
-        out = torch.stack(list(map(ff, map(format_data, obs))), axis=0).cpu()
+        ff = lambda x: self.qf(*x, *self.args)
+        out = torch.stack(list(map(ff, map(self.format_fn, obs))), axis=0).cpu()
         
         actions_one_hot = F.one_hot(actions.to(torch.int64))
         y_pred = torch.sum(out * actions_one_hot, dim=-1).sum(1, keepdim=True)
         qf_loss = self.qf_criterion(y_pred, y_target)
+        
+#         pdb.set_trace()
 
         """
         Soft target network updates
@@ -80,6 +87,7 @@ class DQNTrainer(TorchTrainer):
                 ptu.get_numpy(y_pred),
             ))
             print('qf loss:', self.eval_statistics['QF Loss'])
+            print('total reward:', rewards.sum().item(), '\n')
         self._n_train_steps_total += 1
 
     def get_diagnostics(self):
