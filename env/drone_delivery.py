@@ -16,19 +16,19 @@ from torch_geometric.data import Data
 from torch_geometric.utils import to_dense_adj, to_networkx, to_undirected
 
 sysconfig = namedtuple("sysconfig", 
-                       ['maxX', 'maxY', 'goal_reward', 'collision_penalty'], 
-                       defaults=[4, 4, 1., -.1])
+                       ['maxX', 'maxY', 'goal_reward', 'collision_penalty', 'distance_penalty'], 
+                       defaults=[4, 4, 1., -.1, -.01])
 
 actions = namedtuple("actions", 
                     ['right', 'left', 'up', 'down', 'noop'], 
                     defaults=[np.int64(0), np.int64(1), np.int64(2), np.int64(3), np.int64(4)])
 action = actions()
 
-def fully_connect_graph(n_drones):
+def fully_connect_graph(n_nodes):
     """ Connect the graph s.t. all drones are interconnected and each goal connects to all drones. """
     
-    idx = torch.combinations(torch.arange(n_drones+1), r=2)
-    return to_undirected(idx.t(), num_nodes=n_drones+1)
+    idx = torch.combinations(torch.arange(n_nodes), r=2)
+    return to_undirected(idx.t(), num_nodes=n_nodes)
 
 class droneDelivery(gym.Env):
     """
@@ -58,6 +58,7 @@ class droneDelivery(gym.Env):
     def __init__(self, args, device='cpu'):
         self.config = sysconfig(maxX=args.maze_size, maxY=args.maze_size)
         self.ndrones = args.ndrones
+        self.ngoals = args.ngoals
         
         self.aspace = MultiDiscrete([len(action)]*self.ndrones)
         self.a2vecmap = torch.Tensor([[1., 0.],
@@ -71,18 +72,31 @@ class droneDelivery(gym.Env):
         self._device = device
         
     def get_distances(self):
-        return (self.state.x[-1, :-1]-self.state.x[:-1, :-1]).norm(p=1, dim=1)
+        dis = torch.cdist(self.state.x[:self.ndrones, :-1], self.state.x[-self.ngoals:, :-1], p=1)
+        return dis.min(1).values
     
     def in_collision(self):
-        dis = torch.cdist(self.state.x[:-1, :-1], self.state.x[:-1, :-1], p=1)
+        dis = torch.cdist(self.state.x[:self.ndrones, :-1], self.state.x[:self.ndrones, :-1], p=1)
         return torch.triu((dis == 0).float(), 1).sum().item()
+    
+    def is_terminal(self):
+        return (self.get_distances() == 0).all()
     
     def get_size(self):
         return torch.Tensor([self.config.maxX, self.config.maxY, 2])
+    
+    def get_channels(self):
+        """ Returns in, out channel sizes per agent. """
+        return self.sspace.shape[0], self.aspace.nvec[0]
+            
+    def get_max_len(self):
+        return self.config.maxX + self.config.maxY - 1
         
     def reward(self, a):
-        return self.config.goal_reward * (self.get_distances() == 0).all().float().item() + \
-                self.config.collision_penalty * self.in_collision()
+        done = self.is_terminal().float().item()
+        return self.config.goal_reward * done + \
+               self.config.collision_penalty * self.in_collision() * (1 - done) + \
+               self.config.distance_penalty * self.get_distances() #.sum().item()
                         
     def step(self, a):
         err_msg = f"{a!r} ({type(a)}) is not a valid action."
@@ -90,22 +104,22 @@ class droneDelivery(gym.Env):
         
         reward = self.reward(a)
         a = self.a2vecmap[a]
-        done = (self.get_distances() == 0).all().item()   
+        done = self.is_terminal().item()   
     
-        self.state.x[:-1, :-1] = (self.state.x[:-1, :-1]+a).clamp(min=0, max=self.config.maxX)
+        self.state.x[:self.ndrones, :-1] = (self.state.x[:self.ndrones, :-1]+a).clamp(min=0, max=self.config.maxX)
         
         return deepcopy(self.state), deepcopy(reward), deepcopy(done), {}
 
     def reset(self, seed: Optional[int] = None):
         if not seed == None:
             super().reset(seed=seed)
-            
-        x = torch.Tensor(np.stack([self.sspace.sample() for _ in range(self.ndrones+1)]))
         
+        x = torch.Tensor(np.stack([self.sspace.sample() for _ in range(self.ndrones+self.ngoals)]))
+        # reset the state flags: +1 agent, -1 goal
         x[:, -1] = 1
-        x[-1, -1] = -1 # reset the state flags: +1 agent, -1 goal
+        x[self.ndrones:, -1] = -1        
         
-        edge_index = fully_connect_graph(self.ndrones)
+        edge_index = fully_connect_graph(self.ndrones+self.ngoals)
         self.state = Data(x=x, edge_index=edge_index).to(self._device)
         
         return deepcopy(self.state)
@@ -114,7 +128,7 @@ class droneDelivery(gym.Env):
         if not s:
             s = self.state
         g = torch_geometric.utils.to_networkx(s, to_undirected=False)
-        colors = np.array(['green']*self.ndrones+['yellow'])
+        colors = np.array(['green']*self.ndrones+['yellow']*self.ngoals)
         pos = {i: x[:2].numpy() for i, x in enumerate(self.state.x)}
         nx.draw(g, pos=pos, node_color=colors)
     

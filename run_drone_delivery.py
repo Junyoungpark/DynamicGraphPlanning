@@ -19,15 +19,27 @@ from env.drone_delivery import *
 from path_collector import MdpPathCollector
 from policies import argmaxDiscretePolicy, epsilonGreedyPolicy
 
+# ------------------ Helpers
+
+# use for common rewards
+# def mean_reward_per_traj(paths):
+#     return np.mean([np.sum(p['rewards']) for p in paths])
+
+# def mean_reward(paths):
+#     return np.hstack([p['rewards'] for p in paths]).mean()
+
+# use for distributed rewards
 def mean_reward_per_traj(paths):
-    return np.mean([np.sum(p['rewards']) for p in paths])
+    return np.mean([torch.vstack(p['rewards']).sum().item()  for p in paths])
 
 def mean_reward(paths):
-    return np.hstack([p['rewards'] for p in paths]).mean()
+    return np.hstack([torch.vstack(p['rewards']).sum(1).numpy() for p in paths]).mean()
 
-def getBaselineHeuristic(pol, max_len, n=128, verbose=False):
-    policy = sysRolloutPolicy() 
-    path_collector = MdpPathCollector(env, policy)
+
+# ------------------ Baselines
+
+def getBaseline(pol, max_len, n=128, verbose=False):
+    path_collector = MdpPathCollector(env, pol)
     paths = path_collector.collect_new_paths(n, max_len, False)
     expected_heuristic_pt = mean_reward_per_traj(paths)
     print("Expected reward (per traj):", expected_heuristic_pt)
@@ -44,29 +56,35 @@ def getBaselineHeuristic(pol, max_len, n=128, verbose=False):
             print(t)
     return expected_heuristic_pt, expected_heuristic
 
-def getNetworkBaseline(): 
-    qf = droneDeliveryModel(in_channels, out_channels, 8)
+def getNetworkBaseline(n, max_len, in_channels, out_channels): 
+    qf = droneDeliveryModel(in_channels, out_channels, 8, n)
     policy = argmaxDiscretePolicy(qf) 
-    return getBaselineHeuristic(policy)
+    return getBaseline(policy, max_len)
+
+def getHeuristicBaseline(n, max_len):
+    policy = sysRolloutPolicy(n)
+    return getBaseline(policy, max_len)
+
+
+# ------------------ Train
 
 def dqtrain(env, args):
     printSettings(args)
     
-    in_channels = len(env.sspace.sample())
-    out_channels = len(action)
+    in_channels, out_channels = env.get_channels()
     
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
     
-    qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden, bounds=env.get_size())
+    qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden, n_agents=args.ndrones, bounds=env.get_size())
     if args.load_from:
-        qf.load_state_dict(torch.load("chkpt"+args.load_from))
+        qf.load_state_dict(torch.load("chkpt/"+args.load_from+".pt"))
     qf.to(device)
 
-    target_qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden, bounds=env.get_size())
+    target_qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden, n_agents=args.ndrones, bounds=env.get_size())
     if args.load_from:
-        target_qf.load_state_dict(torch.load("chkpt"+args.load_from))
+        target_qf.load_state_dict(torch.load("chkpt/"+args.load_from+".pt"))
     target_qf.to(device)
 
     qf_criterion = nn.MSELoss()
@@ -78,7 +96,7 @@ def dqtrain(env, args):
     replay_buffer = anyReplayBuffer(args.replay_buffer_cap, prioritized=args.prioritized_replay)
     optimizer = Adam(qf.parameters(), lr=args.learning_rate)
 
-    max_len = env.config.maxX + env.config.maxY - 1
+    max_len = env.get_max_len()
     n_samples = args.replay_buffer_cap//max_len
 
     loss = []
@@ -99,7 +117,12 @@ def dqtrain(env, args):
 
         for _ in range(args.n_iter):
             batch = replay_buffer.random_batch(args.batch_size)
-            rewards = torch.Tensor(batch['rewards']).unsqueeze(-1).to(device)
+            
+            # use for common rewards
+            # rewards = torch.Tensor(batch['rewards']).unsqueeze(-1).to(device)
+            # use for distributed rewards
+            rewards = torch.vstack(batch['rewards'])
+            
             terminals = torch.Tensor(batch['terminals']).unsqueeze(-1).to(device)
             actions = torch.Tensor(batch['actions']).to(device)
 
@@ -130,7 +153,7 @@ def dqtrain(env, args):
               ", (test) ", avg_r_test[-1])
     
     if args.save_to:
-        torch.save(qf.state_dict(), "chkpt"+args.save_to)
+        torch.save(qf.state_dict(), "chkpt/"+args.save_to+".pt")
         
     return loss, avg_r_train, avg_r_test
 
@@ -146,7 +169,8 @@ def make_plot(avg_r_train, avg_r_test, n_iter, n_epoch, expected_random_pt, expe
     plt.legend()
     
     if saveas:
-        plt.savefig(saveas, dpi=300)
+        plt.savefig("figs/drone_delivery/"+saveas+".png", dpi=300)
+    plt.show()
 
 
 parser = ArgumentParser()
@@ -163,6 +187,7 @@ parser.add_argument("-bs", "--batch_size", type=int, default=256, help="batch si
 parser.add_argument("-γ", "--gamma", type=float, default=0.90, help="discount factor")
 parser.add_argument("--load_from", type=str, default="", help="load a pretrained network's weights")
 parser.add_argument("--save_to", type=str, default="", help="save trained network params at")
+parser.add_argument("--plot", type=bool, default=True, help="plot training performance curves")
 
 parser.add_argument("--maze_size", type=int, default=5, help="number of drones spawning in the environment")
 parser.add_argument("--ndrones", type=int, default=1, help="number of drones spawning in the environment")
@@ -175,6 +200,9 @@ env = droneDelivery(args, device=device)
 x = env.reset()
 
 loss, avg_r_train, avg_r_test = dqtrain(env, args)
-        
-# make_plot(avg_r_train, avg_r_test, args.n_iter, args.n_epoch, -.2, 0.85)
+
+if args.plot:
+    net_pt, _ = getNetworkBaseline(args.ndrones, env.get_max_len(), *env.get_channels())
+    heuristic_pt, _ = getHeuristicBaseline(args.ndrones, env.get_max_len())
+    make_plot(avg_r_train, avg_r_test, args.n_iter, args.n_epoch, net_pt, heuristic_pt, args.save_to)
 

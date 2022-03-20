@@ -1,9 +1,10 @@
 import numpy as np
+import pdb
+
 from collections import deque, OrderedDict
 from rlkit.data_management.replay_buffer import ReplayBuffer
+from torch import is_tensor
 from warnings import warn
-# from typing import Deque
-import pdb
 
 grep = lambda q, x : list(map(q.__getitem__, x))
 softmax = lambda x : np.exp(x)/sum(np.exp(x))
@@ -22,6 +23,7 @@ class anyReplayBuffer(ReplayBuffer):
         self._terminals =  deque([], max_replay_buffer_size)
         self._replace = replace
         self._prioritized = prioritized
+        self._weights = deque([], max_replay_buffer_size)
             
 
     def add_sample(self, observation, action, reward, next_observation, terminal, env_info, **kwargs):
@@ -30,12 +32,14 @@ class anyReplayBuffer(ReplayBuffer):
         self._rewards.appendleft(reward)
         self._terminals.appendleft(terminal)
         self._next_obs.appendleft(next_observation)
+        self._weights.appendleft(reward.sum().item() if is_tensor(reward) else reward)
 
     def terminate_episode(self):
         pass
 
     def random_batch(self, batch_size):
-        prio = softmax(self._rewards) if self._prioritized else None
+#         pdb.set_trace()
+        prio = softmax(self._weights) if self._prioritized else None
         indices = np.random.choice(self.get_size(), 
                                    size=batch_size, p=prio, 
                                    replace=self._replace or self._size < batch_size)
