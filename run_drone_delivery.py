@@ -57,7 +57,7 @@ def getBaseline(pol, max_len, n=128, verbose=False):
     return expected_heuristic_pt, expected_heuristic
 
 def getNetworkBaseline(n, max_len, in_channels, out_channels): 
-    qf = droneDeliveryModel(in_channels, out_channels, 8, n)
+    qf = droneDeliveryModel(in_channels, out_channels, [16, 16], n)
     policy = argmaxDiscretePolicy(qf) 
     return getBaseline(policy, max_len)
 
@@ -77,12 +77,15 @@ def dqtrain(env, args):
     np.random.seed(args.seed)
     env.seed(args.seed)
     
-    qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden, n_agents=args.ndrones, bounds=env.get_size())
+    qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden,
+                            n_agents=args.ndrones, n_linear=args.n_linear, bounds=env.get_size())
+    print(qf)
     if args.load_from:
         qf.load_state_dict(torch.load("chkpt/"+args.load_from+".pt"))
     qf.to(device)
 
-    target_qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden, n_agents=args.ndrones, bounds=env.get_size())
+    target_qf = droneDeliveryModel(in_channels, out_channels, args.c_hidden, 
+                                   n_agents=args.ndrones, n_linear=args.n_linear, bounds=env.get_size())
     if args.load_from:
         target_qf.load_state_dict(torch.load("chkpt/"+args.load_from+".pt"))
     target_qf.to(device)
@@ -97,7 +100,7 @@ def dqtrain(env, args):
     optimizer = Adam(qf.parameters(), lr=args.learning_rate)
 
     max_len = env.get_max_len()
-    n_samples = args.replay_buffer_cap//max_len
+    n_samples = min(args.n_samples, args.replay_buffer_cap//max_len) 
 
     loss = []
     avg_r_train = []
@@ -175,16 +178,21 @@ def make_plot(avg_r_train, avg_r_test, n_iter, n_epoch, expected_random_pt, expe
 
 parser = ArgumentParser()
 parser.add_argument("--seed", type=int, default=0, help="random seed")
-parser.add_argument("--c_hidden", type=int, default=32, help="hidden channels in GCN")
+parser.add_argument("--c_hidden", type=int, nargs="+", default=[32, 32, 32], help="hidden channels in GCN")
+parser.add_argument("--n_linear", type=int, default=1, help="number of linear layers in model")
 parser.add_argument("--eps", type=float, default=0.5, help="epislon greedy exploration parameter")
 parser.add_argument("-saf", "--sim_annealing_fac", type=float, default=.9, help="simulated anealing factor")
-parser.add_argument("--replay_buffer_cap", type=int, default=1000, help="replay buffer size, max nr of past samples")
+parser.add_argument("--replay_buffer_cap", type=int, default=10000, help="replay buffer size, max nr of past samples")
+parser.add_argument("--n_samples", type=int, default=64, help="number of trajectories sampled at each epoch.")
 parser.add_argument("--prioritized_replay", type=bool, default=True, help="use prioritzed replay when sampling for HER")
 parser.add_argument("-lr", "--learning_rate", type=float, default=5E-3, help="learning rate")
 parser.add_argument("-ep", "--n_epoch", type=int, default=15, help="number of epochs")
 parser.add_argument("-it", "--n_iter", type=int, default=128, help="number of iterations per epoch")
 parser.add_argument("-bs", "--batch_size", type=int, default=256, help="batch size per iteration")
 parser.add_argument("-γ", "--gamma", type=float, default=0.90, help="discount factor")
+
+parser.add_argument("--graph_type", type=str, default="full", 
+                    help="how the nodes are connected, e.g., \"full\", \"sparse\", or \"light\"")
 parser.add_argument("--load_from", type=str, default="", help="load a pretrained network's weights")
 parser.add_argument("--save_to", type=str, default="", help="save trained network params at")
 parser.add_argument("--plot", type=bool, default=True, help="plot training performance curves")

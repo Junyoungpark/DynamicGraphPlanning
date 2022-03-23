@@ -6,9 +6,17 @@ import torch.nn.functional as F
 from collections import OrderedDict
 from env.drone_delivery import action
 from rlkit.policies.base import Policy
-from torch.nn import Linear, ReLU, Softmax
+from torch.nn import Linear, ReLU, Softmax, LeakyReLU
 from torch_geometric.nn import Sequential, GCNConv, SAGEConv
 from warnings import warn
+
+# ------------------ Helpers
+
+def interleave_lists(list1, list2):
+    out = list1 + list2
+    out[::2] = list1
+    out[1::2] = list2
+    return out
 
 #-------------- Heuristic policy (baseline)
 
@@ -34,24 +42,27 @@ class sysRolloutPolicy(nn.Module, Policy):
         
 class droneDeliveryModel(nn.Module):
     
-    def __init__(self, c_in, c_out, c_hidden=32, n_agents=-1, bounds=None, **kwargs):
+    def __init__(self, c_in, c_out, c_hidden=[], n_agents=-1, n_linear=1, bounds=None, **kwargs):
         
         super().__init__()
         
         if n_agents <= 0:
             assert n_agents != 0, "Yeah nah!! this must be a mistake, you don't have any agents in your scene"
             warn("Just double checking... You have "+str(-n_agents)+" goal regions?")
+            
+        activation_fn = kwargs['activation'] if 'activation' in kwargs.keys() else ReLU(inplace=True)
+
+        assert len(c_hidden) > 0, "Hidden dimension can not be zero => no GCN layer."
+        layer_size = [c_in]+c_hidden+[c_out]
+        n_sage = len(layer_size)-n_linear-1
         
-        self.model = Sequential('x, edge_index', [
-            (SAGEConv(c_in, c_hidden), 'x, edge_index -> x'),
-            ReLU(inplace=True),
-            (SAGEConv(c_hidden, c_hidden), 'x, edge_index -> x'),
-            ReLU(inplace=True),
-            (SAGEConv(c_hidden, c_hidden), 'x, edge_index -> x'),
-            ReLU(inplace=True),
-            Linear(c_hidden, c_out),
-#             nn.Softmax(dim=-1) # no freaking softmax
-        ])
+        layers = [(SAGEConv(layer_size[i], layer_size[i+1]), 'x, edge_index -> x')
+                  if i < n_sage else
+                  Linear(layer_size[i], layer_size[i+1]) 
+                  for i in range(len(c_hidden)+1)]
+        layers = interleave_lists(layers, [activation_fn]*(len(layer_size)-2))
+        
+        self.model = Sequential('x, edge_index', layers)
         
         self._device = 'cpu'
         self._upper_bound = bounds

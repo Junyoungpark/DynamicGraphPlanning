@@ -25,10 +25,35 @@ actions = namedtuple("actions",
 action = actions()
 
 def fully_connect_graph(n_nodes):
-    """ Connect the graph s.t. all drones are interconnected and each goal connects to all drones. """
+    """ Connect the graph s.t. all drones and goals are interconnected. """
     
     idx = torch.combinations(torch.arange(n_nodes), r=2)
     return to_undirected(idx.t(), num_nodes=n_nodes)
+
+def connect_graph(n_drones, n_goal, reverse=False):
+    """ Connect the graph s.t. all drones are interconnected and each goal connects to all drones. """
+    
+    idx = torch.combinations(torch.arange(n_drones), r=2)
+    edge_index = to_undirected(idx.t(), num_nodes=n_drones)
+
+    arr = torch.arange(n_drones, n_drones+n_goal)
+    for i in range(n_drones):
+        goal2drone = torch.stack([arr, i*torch.ones(n_goal, dtype=torch.int64)]) if not reverse else \
+                     torch.stack([i*torch.ones(n_goal, dtype=torch.int64), arr])
+        edge_index = torch.hstack((edge_index, goal2drone))
+    return edge_index
+
+def sparse_connect_graph(n_drones, n_goal, reverse=False, undirected=False):
+    """ Connect the graph s.t. all drones are connected to each goal only. Requires a model with GCN depth ≥ 2 """
+    
+    arr = torch.arange(n_drones, n_drones+n_goal)
+    edge_index = torch.hstack([torch.stack([arr, i*torch.ones(n_goal, dtype=torch.int64)]) \
+                               for i in range(n_drones)])
+    if undirected:
+        return to_undirected(edge_index)
+    if reverse:
+        return edge_index.flip(0)
+    return edge_index
 
 class droneDelivery(gym.Env):
     """
@@ -68,6 +93,15 @@ class droneDelivery(gym.Env):
                                       [0., 0.]]).to(device)
         self.sspace = MultiDiscrete([self.config.maxX, self.config.maxY, 2])
         self.state = None
+        
+        if args.graph_type == "full":
+            self.generate_g = lambda : fully_connect_graph(self.ndrones+self.ngoals) 
+        elif args.graph_type == "sparse":
+            self.generate_g = lambda : sparse_connect_graph(self.ndrones, self.ngoals, undirected=True) 
+        elif args.graph_type == "light":
+            self.generate_g = lambda : connect_graph(self.ndrones, self.ngoals) 
+        else:
+            assert False, "Unspecified graph type."
         
         self._device = device
         
@@ -119,8 +153,7 @@ class droneDelivery(gym.Env):
         x[:, -1] = 1
         x[self.ndrones:, -1] = -1        
         
-        edge_index = fully_connect_graph(self.ndrones+self.ngoals)
-        self.state = Data(x=x, edge_index=edge_index).to(self._device)
+        self.state = Data(x=x, edge_index=self.generate_g()).to(self._device)
         
         return deepcopy(self.state)
 

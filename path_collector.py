@@ -22,11 +22,11 @@ class MdpPathCollector(PathCollector):
         for _ in range(n_paths):
             path = self._rollout_fn(self._env, self._policy, max_path_length=max_path_length)
             
-            path_len = len(path['actions'])
-            if (discard_incomplete_paths and
-                path_len != max_path_length and 
-                not path['dones'][-1]):
-                break
+#             path_len = len(path['actions'])
+#             if (discard_incomplete_paths and
+#                 path_len != max_path_length and 
+#                 not path['dones'][-1]):
+#                 break
             paths.append(path)
         self._epoch_paths.extend(paths)
         return paths
