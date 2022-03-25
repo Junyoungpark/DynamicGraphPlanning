@@ -5,7 +5,6 @@ import numpy as np
 
 from rlkit.core.eval_util import create_stats_ordered_dict
 from rlkit.samplers.data_collector.base import PathCollector
-# from rlkit.samplers.rollout_functions import rollout
 from rollout_functions import *
 
 
@@ -17,20 +16,16 @@ class MdpPathCollector(PathCollector):
         self._epoch_paths = deque(maxlen=self._max_num_epoch_paths_saved)
         self._rollout_fn = rollout_fn
 
-    def collect_new_paths(self, n_paths, max_path_length, num_steps, discard_incomplete_paths=False):
+    def collect_new_paths(self, n_paths, max_path_length, discard_incomplete_paths=False, flatten=False):
         paths = []
         for _ in range(n_paths):
             path = self._rollout_fn(self._env, self._policy, max_path_length=max_path_length)
-            
-#             path_len = len(path['actions'])
-#             if (discard_incomplete_paths and
-#                 path_len != max_path_length and 
-#                 not path['dones'][-1]):
-#                 break
+#             if flatten:
+#                 paths += path
             paths.append(path)
         self._epoch_paths.extend(paths)
         return paths
-
+    
     def get_epoch_paths(self):
         return self._epoch_paths
 

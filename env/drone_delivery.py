@@ -130,15 +130,15 @@ class droneDelivery(gym.Env):
         done = self.is_terminal().float().item()
         return self.config.goal_reward * done + \
                self.config.collision_penalty * self.in_collision() * (1 - done) + \
-               self.config.distance_penalty * self.get_distances() #.sum().item()
+               self.config.distance_penalty * self.get_distances()
                         
     def step(self, a):
         err_msg = f"{a!r} ({type(a)}) is not a valid action."
-        assert self.aspace.contains(a), err_msg
+        assert self.aspace.contains(a.cpu().numpy() if torch.is_tensor(a) else a) , err_msg
         
         reward = self.reward(a)
         a = self.a2vecmap[a]
-        done = self.is_terminal().item()   
+        done = self.is_terminal()
     
         self.state.x[:self.ndrones, :-1] = (self.state.x[:self.ndrones, :-1]+a).clamp(min=0, max=self.config.maxX)
         
@@ -161,7 +161,7 @@ class droneDelivery(gym.Env):
         if not s:
             s = self.state
         g = torch_geometric.utils.to_networkx(s, to_undirected=False)
-        colors = np.array(['green']*self.ndrones+['yellow']*self.ngoals)
+        colors = np.array(['orange']*self.ndrones+['green']*self.ngoals)
         pos = {i: x[:2].numpy() for i, x in enumerate(self.state.x)}
         nx.draw(g, pos=pos, node_color=colors)
     
