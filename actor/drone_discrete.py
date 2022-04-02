@@ -68,7 +68,8 @@ class droneDeliveryModel(nn.Module):
         self.model = Sequential('x, edge_index', layers)
 
         self._device = 'cpu'
-        self._upper_bound = bounds
+        # self._upper_bound = bounds
+        self.register_buffer('_upper_bound', bounds)
         self._n = kwargs['n_agents']  # drones
         self._g = kwargs['n_goals']  # goals
         self._a = c_out  # actions

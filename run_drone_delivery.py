@@ -104,8 +104,7 @@ def dqtrain(env, args):
     expl_policy = epsilonGreedyPolicy(qf, env.aspace, eps=args.eps,
                                       sim_annealing_fac=args.sim_annealing_fac, device=device)
 
-    expl_path_collector = MdpPathCollector(env, expl_policy)
-    eval_path_collector = MdpPathCollector(env, eval_policy)
+    path_collector = MdpPathCollector(env, expl_policy, parallelize=False)
     replay_buffer = anyReplayBuffer(args.replay_buffer_cap, prioritized=args.prioritized_replay)
     optimizer = Adam(qf.parameters(), lr=args.learning_rate)
 
@@ -117,16 +116,16 @@ def dqtrain(env, args):
     avg_r_test = []
 
     for i in range(args.n_epoch):
-        qf.train(False)
-        paths = eval_path_collector.collect_new_paths(128, max_len, False)
+        qf.eval()
+        paths = path_collector.collect_new_paths(128, max_len, False)
         avg_r_test.append(mean_reward_per_traj(paths))
 
-        paths = expl_path_collector.collect_new_paths(n_samples, max_len, False)
+        qf.train()
+        paths = path_collector.collect_new_paths(n_samples, max_len, False)
         replay_buffer.add_paths(paths)
 
-        qf.train(True)
         if i > 0:
-            expl_path_collector._policy.simulated_annealing()
+            path_collector._policy.simulated_annealing()
 
         for _ in range(args.n_iter):
             batch = replay_buffer.random_batch(args.batch_size)
@@ -143,7 +142,7 @@ def dqtrain(env, args):
             target_q_values = out.max(-1, keepdims=False).values
             y_target = rewards + (1. - terminals) * args.gamma * target_q_values
             out = qf(obs)
-            actions_one_hot = F.one_hot(actions.to(torch.int64), len(action))
+            actions_one_hot = F.one_hot(actions.long(), out_channels)
             y_pred = torch.sum(out * actions_one_hot, dim=-1, keepdim=False)
             qf_loss = qf_criterion(y_pred, y_target)
 
